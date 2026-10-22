@@ -59,6 +59,8 @@ public partial class MouseKeyboardPage : UserControl
                            or nameof(Models.SettingsModel.CloseFromCascade)
                            or nameof(Models.SettingsModel.MouseCloseButton)
                            or nameof(Models.SettingsModel.WindowSnap)
+                           or nameof(Models.SettingsModel.ForceQuitKey)
+                           or nameof(Models.SettingsModel.ForceQuitPresses)
                            or null)
             SyncFromModel();
     }
@@ -72,6 +74,9 @@ public partial class MouseKeyboardPage : UserControl
         SelectButtonText.Text = ButtonToken(App.Settings.MouseSelectButton);
         CloseButtonText.Text = ButtonToken(App.Settings.MouseCloseButton);
         DragButtonText.Text = ButtonToken(App.Settings.MouseDragButton);
+        ForceQuitKeyText.Text = string.IsNullOrWhiteSpace(App.Settings.ForceQuitKey)
+            ? "None" : App.Settings.ForceQuitKey;
+        ForceQuitPressesText.Text = $"×{App.Settings.ForceQuitPresses}";
 
         SyncToggleMode();
 
@@ -229,6 +234,23 @@ public partial class MouseKeyboardPage : UserControl
     // Commit, cancel and close are captured on the Cascade Keybindings page —
     // they are lists now, and the page that owns a list owns its editor.
 
+    // ---- Force quit ---------------------------------------------------------
+    // A modifier on its own cannot be the key: the core refuses one (the hook
+    // answers modifiers first), and five taps of Shift is Windows' own Sticky
+    // Keys prompt besides.
+
+    private void ChangeForceQuitKey_Click(object sender, RoutedEventArgs e) =>
+        CaptureKey("Set the force-quit key",
+                   "Press the key (or combination) that quits CKFlip3D when pressed "
+                   + "the chosen number of times in a row. Esc cancels.",
+                   allowReserved: false,
+                   assign: combo => App.Settings.ForceQuitKey = combo,
+                   allowBareModifiers: false);
+
+    // ×1 → ×2 → … → ×5 → ×1: each click is one more press.
+    private void CycleForceQuitPresses_Click(object sender, RoutedEventArgs e) =>
+        App.Settings.ForceQuitPresses = App.Settings.ForceQuitPresses % 5 + 1;
+
     // ---- Mouse-button capture ----------------------------------------------
 
     private void ChangeSelectButton_Click(object sender, RoutedEventArgs e) =>
@@ -247,7 +269,7 @@ public partial class MouseKeyboardPage : UserControl
                       id => App.Settings.MouseDragButton = id);
 
     private void CaptureKey(string title, string prompt, bool allowReserved,
-                            Action<string> assign)
+                            Action<string> assign, bool allowBareModifiers = true)
     {
         if (Window.GetWindow(this) is not MainWindow main)
             return;
@@ -261,7 +283,8 @@ public partial class MouseKeyboardPage : UserControl
                 assign(combo);
             }),
             onCancelled: () => Dispatcher.BeginInvoke(main.CloseModal),
-            allowReservedKeys: allowReserved);
+            allowReservedKeys: allowReserved,
+            allowBareModifiers: allowBareModifiers);
 
         main.ShowModal(title, body, ("Cancel", false, HotkeyService.StopCapture));
     }
@@ -396,5 +419,7 @@ public partial class MouseKeyboardPage : UserControl
         App.Settings.CommitKeys = Models.SettingsModel.DefaultCommitKeys;
         App.Settings.CancelKeys = Models.SettingsModel.DefaultCancelKeys;
         App.Settings.CloseKeys = Models.SettingsModel.DefaultCloseKeys;
+        App.Settings.ForceQuitKey = Models.SettingsModel.DefaultForceQuitKey;
+        App.Settings.ForceQuitPresses = Models.SettingsModel.DefaultForceQuitPresses;
     }
 }

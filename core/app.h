@@ -45,6 +45,10 @@ private:
     void ApplySafeModeOverrides();  // conservative --safe-mode config clamps
     void WriteSafeModeLog();        // %APPDATA%\CKFlip3D\safemode.log diagnostics
     void OnShowCascadeRequest();    // launch shortcut asked for the cascade
+    void OnForceQuit();             // force-quit key sequence: orderly exit
+    /// KeyboardHook::ForceQuitHandler — runs on the HOOK thread, starts the
+    /// watchdog that finishes the job if the orderly exit cannot run.
+    static void ArmForceQuitWatchdog();
 
     void OnFlipActivate();
     void OnFlipCycle();

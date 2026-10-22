@@ -35,6 +35,9 @@ constexpr UINT WM_FLIP_CLOSE_SELECTED = WM_APP + 12;  // Delete
 // wParam.
 constexpr UINT WM_FLIP_SEARCH_CHAR    = WM_APP + 13;
 constexpr UINT WM_FLIP_SEARCH_BACK    = WM_APP + 14;
+// Force quit (Controls → Mouse & keyboard → Keys): the bound key was pressed
+// its number of times in a row.
+constexpr UINT WM_FLIP_FORCE_QUIT     = WM_APP + 15;
 
 enum class HotkeyEvent {
     Activate,
@@ -50,7 +53,8 @@ enum class HotkeyEvent {
     PointerClose,   // x, y = screen coordinates
     CloseSelected,
     SearchChar,     // x = the typed character
-    SearchBack
+    SearchBack,
+    ForceQuit
 };
 
 /// `amount` is only meaningful for HotkeyEvent::Scrub; `x` / `y` carry the

@@ -282,6 +282,22 @@ inline void UnpackHotkeySpec(uint64_t v, uint8_t& mod, unsigned& vk, bool& isMou
 }
 std::atomic<uint64_t> g_hkSpec{ PackHotkeySpec(kModWin, VK_TAB, false) };
 
+// ---------------------------------------------------------------------------
+// Force quit: the key (packed like g_hkSpec, 0 = off), how many presses, and
+// the run currently being counted.  The run is hook-thread only; the rest is
+// written by SetOptions on the app thread.
+// ---------------------------------------------------------------------------
+std::atomic<uint64_t>         g_optForceQuitSpec{ PackHotkeySpec(0, VK_END, false) };
+std::atomic<int>              g_optForceQuitPresses{5};
+std::atomic<ForceQuitHandler> g_forceQuitHandler{nullptr};
+std::atomic<bool>             g_forceQuitFired{false};
+int       g_fqCount  = 0;
+ULONGLONG g_fqLastMs = 0;
+bool      g_fqHeld   = false;   // key is down: further downs are auto-repeat
+// "In a row" means a deliberate burst: a gap longer than this starts over, so
+// the odd End pressed while editing text a minute apart never adds up.
+constexpr ULONGLONG kForceQuitGapMs = 800;
+
 std::wstring ToLower(std::wstring s)
 {
     std::transform(s.begin(), s.end(), s.begin(), ::towlower);
@@ -474,6 +490,62 @@ bool MatchesMainVk(DWORD vk, unsigned mainVk)
     }
 }
 
+// Count presses of the force-quit key.  Called from BOTH hooks for every key
+// and button event, before anything else — it only observes and never changes
+// whether an event is swallowed.  Lives on the hook thread because that keeps
+// running even when the render thread is stuck.
+void TrackForceQuit(DWORD vk, bool isDown, bool isUp)
+{
+    if (g_forceQuitFired.load(std::memory_order_relaxed))
+        return;
+    uint8_t  mods    = 0;
+    unsigned fqVk    = 0;
+    bool     fqMouse = false;
+    UnpackHotkeySpec(g_optForceQuitSpec.load(std::memory_order_relaxed),
+                     mods, fqVk, fqMouse);
+    if (fqVk == 0)
+        return;
+
+    // A modifier neither counts nor breaks the run: it may be part of the
+    // binding, and Shift held by the other hand is not "another key".
+    if (ModifierBitOf(vk))
+        return;
+    if (vk != fqVk) {
+        if (isDown)
+            g_fqCount = 0;     // something else pressed in between
+        return;
+    }
+    if (isUp) {
+        g_fqHeld = false;
+        return;
+    }
+    // A held key's auto-repeat is one press, not a run of them.
+    if (!isDown || g_fqHeld)
+        return;
+    g_fqHeld = true;
+    if (!ModsSatisfied(mods)) {
+        g_fqCount = 0;
+        return;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    if (g_fqCount > 0 && now - g_fqLastMs > kForceQuitGapMs)
+        g_fqCount = 0;
+    g_fqLastMs = now;
+    if (++g_fqCount < g_optForceQuitPresses.load(std::memory_order_relaxed))
+        return;
+
+    g_fqCount = 0;
+    g_forceQuitFired.store(true, std::memory_order_relaxed);
+    // The polite way out first — the app thread tears everything down
+    // properly if it is still pumping — then the handler, which arms the
+    // watchdog for the case where it is not.
+    if (g_msg.forceQuit != 0 && g_hwndNotify != nullptr)
+        PostMessage(g_hwndNotify, g_msg.forceQuit, 0, 0);
+    if (ForceQuitHandler handler = g_forceQuitHandler.load(std::memory_order_acquire))
+        handler();
+}
+
 void ResetWheelState()
 {
     g_wheelAccum      = 0;
@@ -604,6 +676,10 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
     const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
     const bool isUp   = (wParam == WM_KEYUP   || wParam == WM_SYSKEYUP);
+
+    // First, before any branch below can return: every real keystroke counts
+    // toward (or breaks) a force-quit run, session or not.
+    TrackForceQuit(kb->vkCode, isDown, isUp);
 
     uint8_t  modMask     = 0;
     unsigned mainVk      = 0;
@@ -877,6 +953,15 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
     // that is actually untrusted.
     if (ms->flags & LLMHF_LOWER_IL_INJECTED)
         return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+
+    // A mouse button can be the force-quit binding too, and any other button
+    // pressed in the middle of a keyboard run breaks it, as a key would.
+    {
+        bool btnDown = false;
+        const unsigned btnVk = MouseButtonVk(wParam, ms, btnDown);
+        if (btnVk != 0)
+            TrackForceQuit(btnVk, btnDown, !btnDown);
+    }
 
     const bool active = SessionRunning();
 
@@ -1333,6 +1418,8 @@ bool Install(HWND hwndNotify, const Messages& msgs)
     g_msg          = msgs;
     g_mouseDragging = false;
     g_mouseDragResidue = 0.0f;
+    g_fqCount = 0;
+    g_fqHeld  = false;
     DropSession();
     g_suppressNextModRelease = false;
     g_wheelAccum      = 0;
@@ -1507,6 +1594,11 @@ bool PointerOwnsLeftClick()
         || BindKeysUseVk(g_optNavBack.load(std::memory_order_relaxed),    VK_LBUTTON);
 }
 
+void SetForceQuitHandler(ForceQuitHandler handler)
+{
+    g_forceQuitHandler.store(handler, std::memory_order_release);
+}
+
 void SuspendActivation(unsigned ms)
 {
     g_suspendUntilMs.store(ms == 0 ? 0 : GetTickCount64() + ms,
@@ -1620,6 +1712,33 @@ void SetOptions(const TriggerOptions& opts)
                         L"Win+Tab is in use instead").c_str());
     g_hkSpec.store(PackHotkeySpec(spec.modMask, spec.mainVk, spec.mainIsMouse),
                    std::memory_order_relaxed);
+
+    // Force quit.  Unlike the activation hotkey there is no fallback to
+    // impose: an empty or unusable binding means "off", never "End" behind
+    // the user's back.  A modifier on its own is refused for the same reason
+    // the cascade lists refuse one (the hook answers modifiers first), and
+    // because five taps of Shift is Windows' own Sticky Keys prompt.
+    {
+        uint64_t fq = 0;
+        if (!opts.forceQuitKey.empty()) {
+            HotkeySpec fqSpec;
+            if (ParseHotkey(opts.forceQuitKey, fqSpec)
+                && !IsModifierVk(fqSpec.mainVk)
+                && fqSpec.mainVk != 0 && fqSpec.mainVk <= 0xFF)
+                fq = PackHotkeySpec(fqSpec.modMask, fqSpec.mainVk,
+                                    fqSpec.mainIsMouse);
+            else
+                Diag::Report(Diag::Code::BindingUnparsable, Diag::Sev::Warning,
+                             L"The force-quit key could not be understood",
+                             (L"\"" + opts.forceQuitKey
+                              + L"\" is not a key CKFlip3D can watch for, so "
+                                L"force quit from the keyboard is off (Controls "
+                                L"→ Mouse & keyboard → Keys)").c_str());
+        }
+        g_optForceQuitSpec.store(fq, std::memory_order_relaxed);
+        g_optForceQuitPresses.store(std::clamp(opts.forceQuitPresses, 1, 5),
+                                    std::memory_order_relaxed);
+    }
 
     // The five in-cascade key lists.  Each is published as a WHOLE word, so the
     // hook never sees half of the old list beside half of the new one.

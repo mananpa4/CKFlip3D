@@ -224,6 +224,7 @@ public sealed class SettingsModel : INotifyPropertyChanged
     private bool _searchEnabled;               // [Core] searchEnabled — default off
     private bool _searchBox = true;            // [Core] searchBox — draw the field
     private bool _searchMatchProcess = true;   // [Core] searchMatchProcess — match exe names too
+    private bool _searchCancelClearsFirst = true; // [Core] searchCancelClearsFirst — off: cancel closes at once
     // Placement on the cascade host as PERCENTAGES of the primary monitor —
     // X is the field's centre, Y its bottom edge — so one setting reads the
     // same on every resolution.
@@ -237,6 +238,7 @@ public sealed class SettingsModel : INotifyPropertyChanged
     public bool SearchEnabled      { get => _searchEnabled;      set => Set(ref _searchEnabled, value && ToggleSatisfied); }
     public bool SearchBox          { get => _searchBox;          set => Set(ref _searchBox, value); }
     public bool SearchMatchProcess { get => _searchMatchProcess; set => Set(ref _searchMatchProcess, value); }
+    public bool SearchCancelClearsFirst { get => _searchCancelClearsFirst; set => Set(ref _searchCancelClearsFirst, value); }
     public int SearchPosX          { get => _searchPosX;         set => Set(ref _searchPosX, Math.Clamp(value, 0, 100)); }
     public int SearchPosY          { get => _searchPosY;         set => Set(ref _searchPosY, Math.Clamp(value, 0, 100)); }
     public int SearchScale         { get => _searchScale;        set => Set(ref _searchScale, Math.Clamp(value, 50, 200)); }
@@ -312,6 +314,19 @@ public sealed class SettingsModel : INotifyPropertyChanged
     public string CommitKeys { get => _commitKeys; set => Set(ref _commitKeys, value ?? ""); }
     public string CancelKeys { get => _cancelKeys; set => Set(ref _cancelKeys, value ?? ""); }
     public string CloseKeys  { get => _closeKeys;  set => Set(ref _closeKeys, value ?? ""); }
+
+    // ---- Force quit (Controls → Mouse & keyboard → Keys) --------------------
+    // [Core] forceQuitKey / forceQuitPresses — the key, in the hotkey's token
+    // vocabulary, pressed this many times in a row (1-5) ends CKFlip3D even
+    // when it has stopped responding. Empty key = off.
+    public const string DefaultForceQuitKey = "End";
+    public const int DefaultForceQuitPresses = 5;
+
+    private string _forceQuitKey = DefaultForceQuitKey;
+    private int _forceQuitPresses = DefaultForceQuitPresses;
+
+    public string ForceQuitKey  { get => _forceQuitKey;     set => Set(ref _forceQuitKey, value ?? ""); }
+    public int ForceQuitPresses { get => _forceQuitPresses; set => Set(ref _forceQuitPresses, Math.Clamp(value, 1, 5)); }
 
     // ---- One press, one job -------------------------------------------------
 
@@ -543,6 +558,8 @@ public sealed class SettingsModel : INotifyPropertyChanged
         CommitKeys = s.CommitKeys;
         CancelKeys = s.CancelKeys;
         CloseKeys = s.CloseKeys;
+        ForceQuitKey = s.ForceQuitKey;
+        ForceQuitPresses = s.ForceQuitPresses;
         PointerInCascade = s.PointerInCascade;
         MouseSelect = s.MouseSelect;
         MouseSelectButton = s.MouseSelectButton;
@@ -553,6 +570,7 @@ public sealed class SettingsModel : INotifyPropertyChanged
         SearchEnabled = s.SearchEnabled;
         SearchBox = s.SearchBox;
         SearchMatchProcess = s.SearchMatchProcess;
+        SearchCancelClearsFirst = s.SearchCancelClearsFirst;
         SearchPosX = s.SearchPosX;
         SearchPosY = s.SearchPosY;
         SearchScale = s.SearchScale;
@@ -611,6 +629,8 @@ public sealed class SettingsModel : INotifyPropertyChanged
         CommitKeys == s.CommitKeys &&
         CancelKeys == s.CancelKeys &&
         CloseKeys == s.CloseKeys &&
+        ForceQuitKey == s.ForceQuitKey &&
+        ForceQuitPresses == s.ForceQuitPresses &&
         PointerInCascade == s.PointerInCascade &&
         MouseSelect == s.MouseSelect &&
         MouseSelectButton == s.MouseSelectButton &&
@@ -621,6 +641,7 @@ public sealed class SettingsModel : INotifyPropertyChanged
         SearchEnabled == s.SearchEnabled &&
         SearchBox == s.SearchBox &&
         SearchMatchProcess == s.SearchMatchProcess &&
+        SearchCancelClearsFirst == s.SearchCancelClearsFirst &&
         SearchPosX == s.SearchPosX &&
         SearchPosY == s.SearchPosY &&
         SearchScale == s.SearchScale &&

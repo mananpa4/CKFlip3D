@@ -54,6 +54,32 @@
                                 Content="Customize…" Click="ManageCascadeKeys_Click"/>
                     </Grid>
                     <Rectangle Style="{StaticResource RowSeparator}"/>
+                    <!-- Force quit: with the other bindings, above Toggle activation
+                         (which stays last).  The count button cycles ×1 → ×5. -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,20,0">
+                            <TextBlock Style="{StaticResource SettingLabelText}" Text="Force quit"/>
+                            <TextBlock Style="{StaticResource SettingHintText}"
+                                       Text="Press the key this many times in a row to quit CKFlip3D, even when it has stopped responding."/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Style="{StaticResource AeroButton}"
+                                VerticalAlignment="Center" MinWidth="130" Margin="0,0,10,0"
+                                Click="ChangeForceQuitKey_Click">
+                            <TextBlock x:Name="ForceQuitKeyText" Style="{StaticResource MonoValueText}"/>
+                        </Button>
+                        <Button Grid.Column="2" Style="{StaticResource AeroButton}"
+                                VerticalAlignment="Center" MinWidth="56" Padding="10,6"
+                                ToolTip="Presses in a row — click to change"
+                                Click="CycleForceQuitPresses_Click">
+                            <TextBlock x:Name="ForceQuitPressesText" Style="{StaticResource MonoValueText}"/>
+                        </Button>
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}"/>
                     <!-- LAST in the card, under every binding: this one is not
                          a binding at all but a switch over how the ones above
                          behave, and mixing it in among them read as a third

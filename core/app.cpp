@@ -9,8 +9,11 @@
 #include "resource.h"
 #include "DebugLog.h"
 #include "Diagnostics.h"
+#include "../capture/windowcloaker.h"
+#include "../capture/windowscanner.h"
 #include <shellapi.h>
 #include <CommCtrl.h>
+#include <atomic>
 #include <cstdio>
 #include <string>
 
@@ -18,6 +21,9 @@
 #pragma comment(lib, "comctl32.lib")
 
 static constexpr const wchar_t* kWindowClass = L"CKFlip3D_MessageWindow";
+// The tray icon's id — shared with the force-quit watchdog, which removes the
+// icon itself when the app thread is too stuck to.
+static constexpr UINT kTrayIconUid = 1;
 
 // ---------------------------------------------------------------------------
 // Is the tray icon there?
@@ -251,7 +257,7 @@ void App::InitTrayIcon()
     m_nid = {};
     m_nid.cbSize           = sizeof(NOTIFYICONDATAW);
     m_nid.hWnd             = m_hwnd;
-    m_nid.uID              = 1;
+    m_nid.uID              = kTrayIconUid;
     m_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     m_nid.uCallbackMessage = WM_TRAYICON;
 
@@ -440,6 +446,8 @@ void App::ApplyTriggerOptions()
     opts.closeFromCascade = m_config.closeFromCascade;
     opts.closeButton      = m_config.mouseCloseButton;
     opts.searchEnabled    = m_config.searchEnabled;
+    opts.forceQuitKey     = m_config.forceQuitKey;
+    opts.forceQuitPresses = static_cast<int>(m_config.forceQuitPresses);
 
     // ignoredApps is a ';'-separated list of exe names / full paths.
     const std::wstring& list = m_config.ignoredApps;
@@ -532,6 +540,10 @@ void App::ApplySafeModeOverrides()
     // The close keys are their own list, so they have to be emptied here
     // explicitly.  Safe mode is nothing but the switcher itself.
     m_config.closeKeys          = L"";
+    // The way out stays — safe mode is where a stuck switcher is most likely
+    // to be investigated — but on its known-good default, like every other key.
+    m_config.forceQuitKey       = L"End";
+    m_config.forceQuitPresses   = 5;
     m_config.showDebugInfo      = true;
 }
 
@@ -629,6 +641,7 @@ void App::OnHotkeyEvent(HotkeyEvent event, float amount,
         app->m_flip.SearchAppend(static_cast<wchar_t>(x));
         break;
     case HotkeyEvent::SearchBack: app->m_flip.SearchBackspace(); break;
+    case HotkeyEvent::ForceQuit:  app->OnForceQuit();            break;
     }
 }
 
@@ -680,6 +693,83 @@ void App::OnFlipCycleBack() { m_flip.CycleBack(); }
 void App::OnFlipDismiss()   { m_flip.Dismiss(); }
 void App::OnFlipEscape()    { m_flip.Escape(); }
 void App::OnFlipCycleStop() { m_flip.CycleStop(); }
+
+// ---------------------------------------------------------------------------
+// Force quit (Controls → Mouse & keyboard → Keys; End × 5 by default).
+//
+// Two halves.  The hook posts WM_FLIP_FORCE_QUIT; while this thread still
+// pumps, that runs the same orderly exit as the tray's Exit.  The hook also
+// starts a watchdog: if the process is still alive after the grace period,
+// this thread is stuck, so the watchdog restores the desktop itself and ends
+// the process.
+// ---------------------------------------------------------------------------
+static std::atomic<HWND> g_forceQuitTrayOwner{ nullptr };
+static constexpr DWORD   kForceQuitGraceMs = 1500;
+
+void App::OnForceQuit()
+{
+    CKLog::Log(L"CKFlip: force quit requested from the keyboard\n");
+    RemoveTrayIcon();
+    DestroyWindow(m_hwnd);   // → WM_QUIT → the ordinary teardown in Run
+}
+
+// Everything a session can leave behind, undone from a thread that shares
+// nothing with the stuck one: no tracking list, no controller state, and no
+// call that SENDS to another window without first knowing it will answer.
+static void EmergencyRestoreDesktop()
+{
+    // The user's windows first — cloaked behind the cascade, they would stay
+    // invisible (still running, still in the taskbar) after the process died.
+    WindowCloaker::UncloakEverythingUntracked();
+
+    // Taskbars hidden or held for the session.  Posted rather than sent:
+    // explorer may well be the very thing that hung.
+    auto restoreBar = [](HWND bar) {
+        if (!bar)
+            return;
+        if (!WindowScanner::IsNotResponding(bar, 200))
+            EnableWindow(bar, TRUE);   // WM_ENABLE is SENT — only to a bar that answers
+        SetWindowPos(bar, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        ShowWindowAsync(bar, SW_SHOWNA);
+    };
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    restoreBar(tray);
+    for (HWND bar = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr);
+         bar; bar = FindWindowExW(nullptr, bar, L"Shell_SecondaryTrayWnd", nullptr))
+        restoreBar(bar);
+
+    // The tray icon would otherwise linger until the pointer passes over it.
+    HWND owner = g_forceQuitTrayOwner.load();
+    if (owner && (!tray || !WindowScanner::IsNotResponding(tray, 200))) {
+        NOTIFYICONDATAW nid{};
+        nid.cbSize = sizeof(nid);
+        nid.hWnd   = owner;
+        nid.uID    = kTrayIconUid;
+        Shell_NotifyIconW(NIM_DELETE, &nid);
+    }
+}
+
+static DWORD WINAPI ForceQuitWatchdog(LPVOID)
+{
+    Sleep(kForceQuitGraceMs);
+    // Still running: the orderly exit never happened, so the app thread is
+    // stuck.  Restore what it cannot, then go.
+    EmergencyRestoreDesktop();
+    // Deliberately NOT EndSession.  This session did fail, and the next launch
+    // should say so — the marker carries how it ended into its CK0001.
+    Diag::NoteState(L"not responding, force-quit from the keyboard");
+    TerminateProcess(GetCurrentProcess(), 1);
+    return 0;
+}
+
+void App::ArmForceQuitWatchdog()
+{
+    // On the hook thread, inside its time budget: start, never wait.
+    HANDLE thread = CreateThread(nullptr, 0, ForceQuitWatchdog, nullptr, 0, nullptr);
+    if (thread)
+        CloseHandle(thread);
+}
 
 int App::Run(HINSTANCE hInstance)
 {
@@ -793,6 +883,11 @@ int App::Run(HINSTANCE hInstance)
     // Push trigger options (fullscreen ignore, ignore list, wheel/arrows)
     // from config into the freshly installed hook.
     ApplyTriggerOptions();
+
+    // Force quit's second half (see ArmForceQuitWatchdog) — the part that
+    // still works when this thread does not.
+    g_forceQuitTrayOwner.store(m_hwnd);
+    KeyboardHook::SetForceQuitHandler(&App::ArmForceQuitWatchdog);
 
     // Add system tray icon with right-click → Exit.
     InitTrayIcon();

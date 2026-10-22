@@ -31,6 +31,7 @@ KeyboardHook::Messages HotkeyManager::HookMessages()
     m.closeSelected = WM_FLIP_CLOSE_SELECTED;
     m.searchChar    = WM_FLIP_SEARCH_CHAR;
     m.searchBack    = WM_FLIP_SEARCH_BACK;
+    m.forceQuit     = WM_FLIP_FORCE_QUIT;
     return m;
 }
 
@@ -120,6 +121,7 @@ bool HotkeyManager::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         x = static_cast<int>(wParam);
         break;
     case WM_FLIP_SEARCH_BACK: event = HotkeyEvent::SearchBack; break;
+    case WM_FLIP_FORCE_QUIT:  event = HotkeyEvent::ForceQuit;  break;
     default: return false;
     }
 

@@ -81,6 +81,8 @@ public static class ConfigService
                 m.ExcludedApps      = GetString(root, "excludedApps", m.ExcludedApps);
                 m.ActivationHotkey  = GetString(root, "activationHotkey", m.ActivationHotkey);
                 m.HotkeyToggleMode  = GetBool(root, "hotkeyToggleMode", m.HotkeyToggleMode);
+                m.ForceQuitKey      = GetString(root, "forceQuitKey", m.ForceQuitKey);
+                m.ForceQuitPresses  = GetInt(root, "forceQuitPresses", m.ForceQuitPresses);
 
                 // ---- Commit / cancel / close: one key each, until Build 3 ---
                 // Mirrors core/Config.cpp: read the list, and when the file has
@@ -152,6 +154,7 @@ public static class ConfigService
                 m.SearchEnabled      = GetBool(root, "searchEnabled", m.SearchEnabled);
                 m.SearchBox          = GetBool(root, "searchBox", m.SearchBox);
                 m.SearchMatchProcess = GetBool(root, "searchMatchProcess", m.SearchMatchProcess);
+                m.SearchCancelClearsFirst = GetBool(root, "searchCancelClearsFirst", m.SearchCancelClearsFirst);
                 m.SearchPosX         = GetInt(root, "searchPosX", m.SearchPosX);
                 m.SearchPosY         = GetInt(root, "searchPosY", m.SearchPosY);
                 m.SearchScale        = GetInt(root, "searchScale", m.SearchScale);
@@ -260,6 +263,8 @@ public static class ConfigService
         AppendString(sb, "cancelKeys", m.CancelKeys);
         AppendString(sb, "closeKeys", m.CloseKeys);
         AppendBool(sb, "hotkeyToggleMode", m.HotkeyToggleMode);
+        AppendString(sb, "forceQuitKey", m.ForceQuitKey);
+        AppendInt(sb, "forceQuitPresses", m.ForceQuitPresses);
         AppendBool(sb, "pointerInCascade", m.PointerInCascade);
         AppendBool(sb, "mouseSelect", m.MouseSelect);
         AppendInt(sb, "mouseSelectButton", m.MouseSelectButton);
@@ -270,6 +275,7 @@ public static class ConfigService
         AppendBool(sb, "searchEnabled", m.SearchEnabled);
         AppendBool(sb, "searchBox", m.SearchBox);
         AppendBool(sb, "searchMatchProcess", m.SearchMatchProcess);
+        AppendBool(sb, "searchCancelClearsFirst", m.SearchCancelClearsFirst);
         AppendInt(sb, "searchPosX", m.SearchPosX);
         AppendInt(sb, "searchPosY", m.SearchPosY);
         AppendInt(sb, "searchScale", m.SearchScale);

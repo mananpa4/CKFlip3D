@@ -93,6 +93,29 @@
                         <CheckBox Grid.Column="1" Style="{StaticResource AeroToggle}"
                                   IsChecked="{Binding SearchMatchProcess}"/>
                     </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}"/>
+                    <Grid IsEnabled="{Binding SearchEnabled}">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Style.Triggers>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter Property="Opacity" Value="0.45"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,20,0">
+                            <TextBlock Style="{StaticResource SettingLabelText}" Text="Cancel clears search first"/>
+                            <TextBlock Style="{StaticResource SettingHintText}"
+                                       Text="The cancel key clears what you typed first. Press it again to close the cascade. When off, it closes the cascade right away."/>
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource AeroToggle}"
+                                  IsChecked="{Binding SearchCancelClearsFirst}"/>
+                    </Grid>
                 </StackPanel>
             </HeaderedContentControl>
 

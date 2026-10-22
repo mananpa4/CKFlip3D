@@ -301,6 +301,21 @@ private:
     void DrawSelectedLabel(ID3D11DeviceContext* ctx, float vpW, float vpH,
                            DirectX::XMMATRIX monRemap);
     void ResetSelectedLabel();
+    // --- Commit refused: the selected window is not responding -------------
+    /// Dismiss's guard.  True = the front window is not responding: the commit
+    /// did not happen, the session was handed back to the hook, and the
+    /// refusal cue was started.
+    bool RefuseUnresponsiveCommit();
+    /// Per-frame clock of the refusal cue (shake + notice).  Fills
+    /// m_rejectShakePx and m_rejectNoticeAlpha; clears itself once the cue has
+    /// played out or the selection moved on.
+    void UpdateRejectState();
+    void ClearRejectState();
+    bool BuildRejectNoticeTexture(int theme, float uiScale, bool showBox);
+    /// The notice pill: above the selected-window label when that is drawn,
+    /// in the label's own place when it is not.
+    void DrawRejectNotice(ID3D11DeviceContext* ctx, float vpW, float vpH,
+                          DirectX::XMMATRIX monRemap);
     void StartTaskbarCapture();
     void HideRealTaskbar();
     void ShowRealTaskbar();
@@ -431,6 +446,39 @@ private:
     // successive frames — differently sized windows swapping through the
     // front slot glide instead of teleporting (animation/LabelAnimator).
     LabelAnimator                m_labelAnim;
+    // Where the label was drawn THIS frame (overlay pixels, before the refusal
+    // shake), so the not-responding notice can stack itself above it.
+    bool                         m_labelDrawn = false;
+    float                        m_labelDrawLeft = 0.0f;
+    float                        m_labelDrawTop  = 0.0f;
+    float                        m_labelDrawW    = 0.0f;
+    float                        m_labelDrawH    = 0.0f;
+
+    // --- Commit refused: the selected window is not responding -------------
+    // See RefuseUnresponsiveCommit.  Nothing here blocks input — the user can
+    // step to another window or cancel mid-cue.
+    HWND                         m_rejectHwnd = nullptr;   // the refused window
+    LARGE_INTEGER                m_rejectQPC{};            // cue start
+    LARGE_INTEGER                m_rejectLeaveQPC{};       // selection moved on (0 = not yet)
+    float                        m_rejectShakePx     = 0.0f;  // this frame, overlay px
+    float                        m_rejectNoticeAlpha = 0.0f;  // this frame
+    winrt::com_ptr<ID3D11Texture2D>          m_rejectNoticeTexture;
+    winrt::com_ptr<ID3D11ShaderResourceView> m_rejectNoticeSRV;
+    int                          m_rejectNoticeW = 0;
+    int                          m_rejectNoticeH = 0;
+    int                          m_rejectNoticeTheme = -1;    // built for (theme, scale, box)
+    float                        m_rejectNoticeScale = 0.0f;
+    bool                         m_rejectNoticeBox   = true;
+    // The probe answers in a frame or less for any window that is pumping; a
+    // window silent for this long cannot restore itself promptly either.
+    static constexpr UINT        kRejectProbeMs      = 200;
+    static constexpr double      kRejectShakeMs      = 420.0;
+    static constexpr float       kRejectShakeCycles  = 2.0f;
+    static constexpr float       kRejectShakeAmpPx   = 14.0f;  // at 1080p
+    static constexpr double      kRejectFadeInMs     = 140.0;
+    static constexpr double      kRejectHoldMs       = 2200.0; // fully shown until
+    static constexpr double      kRejectFadeOutMs    = 320.0;
+    static constexpr double      kRejectLeaveMs      = 160.0;  // fade once the user moves on
 
     // --- Pointer in the cascade --------------------------------------------
     // The hover lift is a DRAW offset (see HoverAnimator) — it owns no slot

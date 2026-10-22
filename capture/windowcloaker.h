@@ -42,4 +42,10 @@ void UncloakAll();
 /// crash recovery — ensures nothing stays permanently hidden.
 void ForceUncloakEverything();
 
+/// Uncloak every top-level window without touching the tracking list.
+/// Used by the force-quit watchdog, which cannot trust that list while the
+/// app thread is stuck.  Only sets DWM attributes, so a hung window cannot
+/// stall it.
+void UncloakEverythingUntracked();
+
 } // namespace WindowCloaker

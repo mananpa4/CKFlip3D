@@ -269,6 +269,9 @@ AppConfig Config::Load()
     cfg.excludedApps     = FindString(json, "excludedApps",   cfg.excludedApps);
     cfg.activationHotkey = FindString(json, "activationHotkey", cfg.activationHotkey);
     cfg.hotkeyToggleMode = FindBool(json, "hotkeyToggleMode", cfg.hotkeyToggleMode);
+    cfg.forceQuitKey     = FindString(json, "forceQuitKey", cfg.forceQuitKey);
+    cfg.forceQuitPresses = static_cast<uint32_t>(
+        FindInt(json, "forceQuitPresses", static_cast<int>(cfg.forceQuitPresses)));
 
     // ---- Commit / cancel / close: one key each, until Build 3 --------------
     // Same migration shape as the navigation lists below: read the list, and
@@ -348,6 +351,8 @@ AppConfig Config::Load()
     cfg.searchEnabled      = FindBool(json, "searchEnabled",      cfg.searchEnabled);
     cfg.searchBox          = FindBool(json, "searchBox",          cfg.searchBox);
     cfg.searchMatchProcess = FindBool(json, "searchMatchProcess", cfg.searchMatchProcess);
+    cfg.searchCancelClearsFirst =
+        FindBool(json, "searchCancelClearsFirst", cfg.searchCancelClearsFirst);
     cfg.searchPosX  = static_cast<uint32_t>(
         FindInt(json, "searchPosX",  static_cast<int>(cfg.searchPosX)));
     cfg.searchPosY  = static_cast<uint32_t>(
@@ -452,6 +457,8 @@ AppConfig Config::Load()
     if (cfg.searchPosY > 100) cfg.searchPosY = 100;
     if (cfg.searchScale < 50)  cfg.searchScale = 50;
     if (cfg.searchScale > 200) cfg.searchScale = 200;
+    if (static_cast<int>(cfg.forceQuitPresses) < 1) cfg.forceQuitPresses = 1;
+    if (cfg.forceQuitPresses > 5) cfg.forceQuitPresses = 5;
 
     // Report the clamps that actually moved something.  Only the ranges a
     // hand-edited or hand-migrated file realistically gets wrong — the rest
@@ -468,6 +475,9 @@ AppConfig Config::Load()
     if (raw.startDelayMs != cfg.startDelayMs)
         clamped(L"startDelayMs", static_cast<long>(raw.startDelayMs),
                 static_cast<long>(cfg.startDelayMs));
+    if (raw.forceQuitPresses != cfg.forceQuitPresses)
+        clamped(L"forceQuitPresses", static_cast<long>(static_cast<int>(raw.forceQuitPresses)),
+                static_cast<long>(cfg.forceQuitPresses));
 
     // Combinations the Settings app refuses to save, which say nothing about
     // how the file got this way — an older build wrote it, or it was edited by
@@ -557,6 +567,8 @@ void Config::Save(const AppConfig& cfg)
     fprintf(f, "  \"cancelKeys\": \"%s\",\n",       EscapeUtf8(cfg.cancelKeys).c_str());
     fprintf(f, "  \"closeKeys\": \"%s\",\n",        EscapeUtf8(cfg.closeKeys).c_str());
     fprintf(f, "  \"hotkeyToggleMode\": %s,\n", cfg.hotkeyToggleMode ? "true" : "false");
+    fprintf(f, "  \"forceQuitKey\": \"%s\",\n",     EscapeUtf8(cfg.forceQuitKey).c_str());
+    fprintf(f, "  \"forceQuitPresses\": %u,\n",     cfg.forceQuitPresses);
     fprintf(f, "  \"pointerInCascade\": %s,\n",   cfg.pointerInCascade  ? "true" : "false");
     fprintf(f, "  \"mouseSelect\": %s,\n",        cfg.mouseSelect       ? "true" : "false");
     fprintf(f, "  \"mouseSelectButton\": %d,\n",  cfg.mouseSelectButton);
@@ -567,6 +579,8 @@ void Config::Save(const AppConfig& cfg)
     fprintf(f, "  \"searchEnabled\": %s,\n",      cfg.searchEnabled      ? "true" : "false");
     fprintf(f, "  \"searchBox\": %s,\n",          cfg.searchBox          ? "true" : "false");
     fprintf(f, "  \"searchMatchProcess\": %s,\n", cfg.searchMatchProcess ? "true" : "false");
+    fprintf(f, "  \"searchCancelClearsFirst\": %s,\n",
+            cfg.searchCancelClearsFirst ? "true" : "false");
     fprintf(f, "  \"searchPosX\": %u,\n",         cfg.searchPosX);
     fprintf(f, "  \"searchPosY\": %u,\n",         cfg.searchPosY);
     fprintf(f, "  \"searchScale\": %u,\n",        cfg.searchScale);

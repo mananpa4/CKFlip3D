@@ -160,6 +160,8 @@ public partial class ControlsPage : UserControl
         App.Settings.CommitKeys = Models.SettingsModel.DefaultCommitKeys;
         App.Settings.CancelKeys = Models.SettingsModel.DefaultCancelKeys;
         App.Settings.CloseKeys = Models.SettingsModel.DefaultCloseKeys;
+        App.Settings.ForceQuitKey = Models.SettingsModel.DefaultForceQuitKey;
+        App.Settings.ForceQuitPresses = Models.SettingsModel.DefaultForceQuitPresses;
         App.Settings.IgnoredApps = "";
         // Opt-in by default — see MouseKeyboardPage.RestoreDefaults_Click.
         App.Settings.PointerInCascade = false;

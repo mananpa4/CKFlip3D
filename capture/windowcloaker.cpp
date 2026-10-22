@@ -254,7 +254,12 @@ void UncloakAll()
 void ForceUncloakEverything()
 {
     UncloakAll();
+    UncloakEverythingUntracked();
+    CKLog::Log(L"CKFlip: ForceUncloakEverything completed\n");
+}
 
+void UncloakEverythingUntracked()
+{
     EnumWindows([](HWND hwnd, LPARAM) -> BOOL {
         if (!IsWindow(hwnd))
             return TRUE;
@@ -263,8 +268,6 @@ void ForceUncloakEverything()
                               &uncloakVal, sizeof(uncloakVal));
         return TRUE;
     }, 0);
-
-    CKLog::Log(L"CKFlip: ForceUncloakEverything completed\n");
 }
 
 } // namespace WindowCloaker

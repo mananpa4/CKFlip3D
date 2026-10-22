@@ -86,6 +86,7 @@ public partial class SearchPage : UserControl
         App.Settings.SearchEnabled = false;
         App.Settings.SearchBox = true;
         App.Settings.SearchMatchProcess = true;
+        App.Settings.SearchCancelClearsFirst = true;
         RestorePlacement_Click(sender, e);
     }
 }

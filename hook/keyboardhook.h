@@ -112,6 +112,10 @@ struct TriggerOptions {
     std::wstring closeKeys      = L"Delete";
     std::wstring navForwardKeys = L"Tab;Down;Right";
     std::wstring navBackKeys    = L"Shift+Tab;Up;Left";
+
+    // ---- Force quit (see AppConfig::forceQuitKey) -------------------------
+    std::wstring forceQuitKey     = L"End";
+    int          forceQuitPresses = 5;    // 1-5
 };
 
 /// How many keys one binding list can hold.
@@ -242,6 +246,14 @@ void AbortSessionIfIdle(uint64_t epoch);
 /// rules as the hotkey — one set of filters, both input paths.
 bool ShouldIgnoreActivation();
 
+/// Called on the HOOK thread when the force-quit sequence completes, right
+/// after the `forceQuit` message is posted.  The message only helps while the
+/// app thread is still pumping; this covers the case where it is not.  Runs
+/// inside the hook's time budget, so it must return at once (start a
+/// watchdog, do not do the work here).
+using ForceQuitHandler = void (*)();
+void SetForceQuitHandler(ForceQuitHandler handler);
+
 /// Hold activation off for `ms` milliseconds (0 releases it immediately).
 ///
 /// The Settings app's touchpad-activity panel takes the pointer and reads raw
@@ -276,6 +288,7 @@ void SuspendActivation(unsigned ms);
 ///   closeSelected — Delete pressed; close the hovered or front window
 ///   searchChar    — a printable key no binding claimed; wParam = character
 ///   searchBack    — Backspace while the search query is being typed
+///   forceQuit     — the force-quit key was pressed its number of times
 struct Messages {
     UINT activate      = 0;
     UINT cycle         = 0;
@@ -291,6 +304,7 @@ struct Messages {
     UINT closeSelected = 0;
     UINT searchChar    = 0;
     UINT searchBack    = 0;
+    UINT forceQuit     = 0;
 };
 
 /// Install the low-level keyboard hook.

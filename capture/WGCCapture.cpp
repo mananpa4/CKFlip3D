@@ -6,6 +6,7 @@
 // Copyright © 2026 Karol Cymerman (CYMERKAROL) — https://github.com/CYMERKAROL/CKFlip3D
 // ---------------------------------------------------------------------------
 #include "WGCCapture.hpp"
+#include "windowscanner.h"
 #include "../core/DebugLog.h"
 #include "../core/Diagnostics.h"
 
@@ -640,12 +641,22 @@ bool WGCCapture::CaptureWithPrintWindow(HWND hwnd, ID3D11Device* device)
 
     // PrintWindow with PW_RENDERFULLCONTENT (0x2) for best results.
     // Note: PrintWindow often fails for minimized windows, returning empty content.
-    BOOL printed = PrintWindow(hwnd, memDC, 0x2);  // PW_RENDERFULLCONTENT
-    if (!printed) {
-        printed = PrintWindow(hwnd, memDC, 0x1);  // PW_CLIENTONLY
-    }
-    if (!printed) {
-        printed = PrintWindow(hwnd, memDC, 0x0);  // No flags
+    //
+    // PrintWindow waits for the window with no timeout, and a hung window
+    // never answers — so ask first.  Windows with no WGC frame are exactly the
+    // ones most likely to be hung.  A skipped window keeps the dark placeholder
+    // below, which still counts as a frame, so it is not retried every frame.
+    BOOL printed = FALSE;
+    if (WindowScanner::IsNotResponding(hwnd, 100)) {
+        CKLog::Log(L"CKFlip: PrintWindow skipped — window is not responding\n");
+    } else {
+        printed = PrintWindow(hwnd, memDC, 0x2);  // PW_RENDERFULLCONTENT
+        if (!printed) {
+            printed = PrintWindow(hwnd, memDC, 0x1);  // PW_CLIENTONLY
+        }
+        if (!printed) {
+            printed = PrintWindow(hwnd, memDC, 0x0);  // No flags
+        }
     }
 
     // Log result

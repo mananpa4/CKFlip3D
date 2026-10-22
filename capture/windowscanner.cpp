@@ -201,4 +201,22 @@ HWND FindDesktopWindow()
     return GetShellWindow();
 }
 
+bool IsNotResponding(HWND hwnd, UINT probeTimeoutMs)
+{
+    if (!hwnd || !IsWindow(hwnd))
+        return false;
+    if (IsHungAppWindow(hwnd))
+        return true;
+
+    DWORD_PTR result = 0;
+    SetLastError(ERROR_SUCCESS);
+    if (SendMessageTimeoutW(hwnd, WM_NULL, 0, 0,
+                            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                            probeTimeoutMs, &result))
+        return false;
+    // Only a TIMEOUT is silence.  Both the probe running out and the
+    // abort-if-hung early return report it this way.
+    return GetLastError() == ERROR_TIMEOUT;
+}
+
 } // namespace WindowScanner

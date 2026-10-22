@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.2
+
+### Not-responding windows
+
+- **Switching to a window that is not responding no longer freezes CKFlip3D.** Restoring such a window waits for it, and a hung window never answers, so the switch is refused instead. The cascade stays open, the front tile gives a short shake, and a notice reads **Application is not responding - Unable to switch**. Picking another window or cancelling works as usual, and with hold & release you simply hold the hotkey again, step and let go.
+- Only responsiveness is checked, never what the preview shows: a fullscreen game or a window with an empty preview still switches normally.
+- A window with no live preview is no longer captured the slow way when it is not responding, which could freeze the cascade while it opened.
+
+### Force quit
+
+- New **Force quit** on **Controls → Mouse & keyboard**: press **End five times** in a row to quit CKFlip3D, even when it has stopped responding. Hidden windows and the taskbar are restored first. If the program cannot shut down on its own, it is ended after a moment and the next launch reports it.
+- The key (or combination, or mouse button) and the number of presses (×1 to ×5) can be changed, or the key set to none. The presses are not swallowed, so End still reaches the app you are in. Safe mode always keeps End × 5.
+
+### Search
+
+- New **Cancel clears search first** *(default on)*. On, the cancel key clears what you typed and a second press closes the cascade, as before. Off, it closes the cascade right away.
+
 ## 1.6.1
 
 ### Cascade Keybindings

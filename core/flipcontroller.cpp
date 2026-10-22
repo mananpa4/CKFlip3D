@@ -703,6 +703,8 @@ void FlipController::Shutdown()
     m_wallpaperCapture.reset();
     StopIconResolver();   // no-op unless the session ended some other way
     ResetSelectedLabel();
+    m_rejectNoticeSRV     = nullptr;   // GPU objects go before the device does
+    m_rejectNoticeTexture = nullptr;
     m_renderer.Shutdown();
 }
 
@@ -793,6 +795,7 @@ void FlipController::Activate()
     m_staticBackdropSRV     = nullptr;
     m_taskbarDrawOnTop = false;
     m_labelAnim.Reset();   // label anchor re-derives from this session's cascade
+    ClearRejectState();    // a refusal cue belongs to the session that raised it
     // Pointer / search state is strictly per-session — a hover from the last
     // cascade would highlight a slot that now holds a different window, and a
     // stale query would open the stack already filtered.
@@ -2065,6 +2068,12 @@ void FlipController::Dismiss()
     // window that gets raised is the one actually in front.
     ResolveScrub();
 
+    // A window that is not responding cannot be switched to (see
+    // RefuseUnresponsiveCommit).  Checked before anything below can start the
+    // exit morph; the cascade simply stays open.
+    if (RefuseUnresponsiveCommit())
+        return;
+
     // If the entry morph is still running, defer reverse-in-place by
     // kReverseDelayMs.  Releasing the trigger key very early in the entry
     // (e.g. ≤2 frames in) would otherwise immediately mirror the morph and
@@ -2405,7 +2414,12 @@ void FlipController::Escape()
     // release bookkeeping that keeps the Start menu shut, and that has to
     // happen on the hook thread) — so re-arm it here, because the cascade is
     // in fact staying open.
-    if (m_config && m_config->searchEnabled && !m_search.Empty()) {
+    //
+    // "Cancel clears search first" off (config searchCancelClearsFirst): the
+    // key closes the cascade whatever has been typed.  Nothing else changes —
+    // the exit below already brings the filtered-out windows back in first.
+    if (m_config && m_config->searchEnabled && m_config->searchCancelClearsFirst
+        && !m_search.Empty()) {
         SearchClear();
         KeyboardHook::ResumeSession();
         return;
@@ -2539,8 +2553,10 @@ void FlipController::FinishDismiss()
     if (!m_windows.empty() && m_windows[0].hwnd != m_desktopHwnd) {
         HWND target = m_windows[0].hwnd;
         if (target && IsWindow(target)) {
+            // Async: the window may have stopped responding during the exit
+            // morph, and a synchronous restore would then never return.
             if (IsIconic(target))
-                ShowWindow(target, SW_RESTORE);
+                ShowWindowAsync(target, SW_RESTORE);
             // The one thing the whole program exists to do.  Windows grants
             // foreground only under conditions this process does not fully
             // control, and when it refuses, the cascade closes onto the window
@@ -2568,6 +2584,7 @@ void FlipController::FinishDismiss()
     // frame is the warm start for the next tile-disabled session.
     if (m_wallpaperCapture) m_wallpaperCapture->Stop();
     ResetSelectedLabel();
+    ClearRejectState();
     if (m_taskbarCapture) { m_taskbarCapture->Stop(); m_taskbarCapture.reset(); }
     for (auto& tray : m_secondaryTrays) {
         if (tray.capture)
@@ -2662,6 +2679,7 @@ void FlipController::FinishEscape()
     // See FinishDismiss — warm-cached wallpaper capture, label teardown.
     if (m_wallpaperCapture) m_wallpaperCapture->Stop();
     ResetSelectedLabel();
+    ClearRejectState();
     if (m_taskbarCapture) { m_taskbarCapture->Stop(); m_taskbarCapture.reset(); }
     for (auto& tray : m_secondaryTrays) {
         if (tray.capture)
@@ -3835,6 +3853,14 @@ void FlipController::RenderFrame()
         m_hover.Tick(m_scene.SlotCount(), AnimHoverEnabled());
     }
 
+    // Refused commit (window not responding): advance the shake and the
+    // notice.  A screen-space nudge of the front tile — post-projection, so
+    // the tile slides sideways as a whole whatever its depth — and zero on
+    // every frame the cue is not playing.
+    UpdateRejectState();
+    const float rejectShakeNdc = (m_rejectShakePx != 0.0f && vpW > 0.0f)
+        ? m_rejectShakePx * 2.0f / vpW : 0.0f;
+
     float motionIntensity = m_cycleAnim.GetMotionIntensity();
     if (m_closeAnim.GetMotionIntensity() > motionIntensity)
         motionIntensity = m_closeAnim.GetMotionIntensity();
@@ -4062,6 +4088,11 @@ void FlipController::RenderFrame()
             if (slotAlpha < 0.001f) continue;
             DirectX::XMMATRIX reflMVP =
                 DirectX::XMLoadFloat4x4(&refl.mvp) * monRemap;
+            // The mirror shakes with its tile — a floor reflection that stood
+            // still under a moving window would give the trick away.
+            if (rejectShakeNdc != 0.0f && SlotWindowIndex(idx) == 0)
+                reflMVP = reflMVP
+                        * DirectX::XMMatrixTranslation(rejectShakeNdc, 0.0f, 0.0f);
             DirectX::XMStoreFloat4x4(&refl.mvp, reflMVP);
             refl.alpha = slotAlpha * kReflectionStrength * reflectionGate;
             // Same crop as the tile (desktop tile's UV band included),
@@ -4162,6 +4193,12 @@ void FlipController::RenderFrame()
                             HoverLiftFor(idx));
         DirectX::XMMATRIX perspMVP =
             DirectX::XMLoadFloat4x4(&draw.mvp) * monRemap;
+        // Refused commit: the selected tile shakes its head.  Zero whenever a
+        // morph owns the poses (see UpdateRejectState), so the lerp below
+        // never sees it.
+        if (rejectShakeNdc != 0.0f && widx == 0)
+            perspMVP = perspMVP
+                     * DirectX::XMMatrixTranslation(rejectShakeNdc, 0.0f, 0.0f);
         DirectX::XMStoreFloat4x4(&draw.mvp, perspMVP);
         if ((m_entryExitAnimator.IsActive() || finishAfterPresent)
             && widx < m_windows.size()) {
@@ -4230,8 +4267,11 @@ void FlipController::RenderFrame()
     // travelling and the pill would float over mid-flight geometry.
     if (!m_entryExitAnimator.IsActive() && !m_exitPending
         && !finishAfterPresent) {
+        m_labelDrawn = false;   // DrawSelectedLabel says so if it draws
         UpdateSelectedLabel();
         DrawSelectedLabel(ctx, vpW, vpH, monRemap);
+        // After the label, so it knows where the label landed this frame.
+        DrawRejectNotice(ctx, vpW, vpH, monRemap);
         // Search field below the cascade — same gate as the label, for the
         // same reason: mid-morph there is no cascade for it to sit under.
         UpdateSearchBox();
@@ -6553,6 +6593,16 @@ void FlipController::DrawSelectedLabel(ID3D11DeviceContext* ctx, float vpW,
     if (top < primT + margin)
         top = primT + margin;
 
+    // Recorded BEFORE the shake below: the not-responding notice stacks above
+    // this rect and has to stay put while the label shakes with its tile.
+    m_labelDrawn    = true;
+    m_labelDrawLeft = left;
+    m_labelDrawTop  = top;
+    m_labelDrawW    = w;
+    m_labelDrawH    = h;
+    // The label belongs to the tile it names, so a refused commit shakes both.
+    left += m_rejectShakePx;
+
     QuadDrawCall draw;
     DirectX::XMStoreFloat4x4(&draw.mvp,
         DirectX::XMMatrixScaling((w / vpW) * 2.0f, (h / vpH) * 2.0f, 1.0f)
@@ -6562,4 +6612,351 @@ void FlipController::DrawSelectedLabel(ID3D11DeviceContext* ctx, float vpW,
     draw.alpha      = m_labelAnim.Alpha();
     draw.blurAmount = 0.0f;
     m_quad.Draw(ctx, m_labelSRV.get(), draw);
+}
+
+// ---------------------------------------------------------------------------
+// Commit refused: the selected window is not responding.
+//
+// Committing restores the window if it is minimized, and restoring waits for
+// the window's thread.  On a hung window that wait never ends, and it would
+// freeze the render thread under a full-screen overlay.  So the commit is
+// refused instead: the cascade stays up, the front tile shakes, a notice says
+// why, and the user can pick another window or cancel.
+//
+// Only responsiveness is checked, never what the tile shows (see
+// WindowScanner::IsNotResponding) — a fullscreen game can have an empty
+// preview and still be alive.
+// ---------------------------------------------------------------------------
+static constexpr const wchar_t* kNotRespondingText =
+    L"Application is not responding - Unable to switch";
+
+bool FlipController::RefuseUnresponsiveCommit()
+{
+    if (m_windows.empty())
+        return false;
+    HWND target = m_windows[0].hwnd;
+    if (!target || !WindowScanner::IsNotResponding(target, kRejectProbeMs))
+        return false;
+
+    // The hook dropped the session before posting the commit, but the cascade
+    // is still up, so give it back.  Deliberately NOT latched into toggle
+    // mode: a hold & release user holds the hotkey again, steps to another
+    // window and lets go, and that release has to switch.
+    KeyboardHook::ResumeSession();
+
+    m_rejectHwnd = target;
+    QueryPerformanceCounter(&m_rejectQPC);
+    m_rejectLeaveQPC.QuadPart = 0;
+    CKLog::Log(L"CKFlip: commit refused — the selected window is not responding\n");
+    return true;
+}
+
+void FlipController::ClearRejectState()
+{
+    m_rejectHwnd = nullptr;
+    m_rejectQPC.QuadPart      = 0;
+    m_rejectLeaveQPC.QuadPart = 0;
+    m_rejectShakePx     = 0.0f;
+    m_rejectNoticeAlpha = 0.0f;
+}
+
+void FlipController::UpdateRejectState()
+{
+    m_rejectShakePx     = 0.0f;
+    m_rejectNoticeAlpha = 0.0f;
+    if (!m_rejectHwnd || m_perfFreq.QuadPart <= 0)
+        return;
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    auto msSince = [&](const LARGE_INTEGER& t) {
+        return static_cast<double>(now.QuadPart - t.QuadPart) * 1000.0
+             / static_cast<double>(m_perfFreq.QuadPart);
+    };
+
+    // While the entry or exit morph runs, nothing of the cue would be
+    // visible, so its clock only starts once the cascade has formed.
+    if (m_entryExitAnimator.IsActive() || m_exitPending) {
+        m_rejectQPC = now;
+        return;
+    }
+
+    // The user stepped to another window, or the refused one closed: the
+    // notice fades out quickly and the shake stops.
+    const bool stillSelected =
+        !m_windows.empty() && m_windows[0].hwnd == m_rejectHwnd;
+    if (!stillSelected && m_rejectLeaveQPC.QuadPart == 0)
+        m_rejectLeaveQPC = now;
+
+    // The master animation switch covers the cue too: off = the notice simply
+    // appears and disappears, and nothing shakes.
+    const bool animate = !m_config || m_config->animations;
+    const double t = msSince(m_rejectQPC);
+
+    double alpha;
+    if (!animate)
+        alpha = (t < kRejectHoldMs + kRejectFadeOutMs) ? 1.0 : 0.0;
+    else if (t < kRejectFadeInMs)
+        alpha = t / kRejectFadeInMs;
+    else if (t < kRejectHoldMs)
+        alpha = 1.0;
+    else
+        alpha = 1.0 - (t - kRejectHoldMs) / kRejectFadeOutMs;
+    if (m_rejectLeaveQPC.QuadPart != 0) {
+        const double leave =
+            animate ? 1.0 - msSince(m_rejectLeaveQPC) / kRejectLeaveMs : 0.0;
+        alpha = (std::min)(alpha, leave);
+    }
+    if (alpha <= 0.0) {
+        ClearRejectState();
+        return;
+    }
+    m_rejectNoticeAlpha = static_cast<float>((std::min)(alpha, 1.0));
+
+    // One short shake of the head, damped to rest — light, and over in well
+    // under half a second.  Only on a still stack: a cycle or a close reflow
+    // owns the poses, and a nudge on top of either would read as a glitch.
+    if (animate && stillSelected && t < kRejectShakeMs
+        && !m_cycleAnim.IsActive() && !m_closeAnim.IsActive()) {
+        const float u = static_cast<float>(t / kRejectShakeMs);
+        const float damp = (1.0f - u) * (1.0f - u);
+        const float uiScale = std::clamp(m_cascadeH / 1080.0f, 1.0f, 2.5f);
+        m_rejectShakePx = kRejectShakeAmpPx * uiScale * damp
+            * std::sin(u * kRejectShakeCycles * 2.0f * DirectX::XM_PI);
+    }
+}
+
+namespace {
+
+/// Distance from (px, py) to the segment (ax, ay)-(bx, by).
+float SegmentDist(float px, float py, float ax, float ay, float bx, float by)
+{
+    const float ex = bx - ax, ey = by - ay;
+    const float len2 = ex * ex + ey * ey;
+    const float t = len2 > 0.0f
+        ? std::clamp(((px - ax) * ex + (py - ay) * ey) / len2, 0.0f, 1.0f)
+        : 0.0f;
+    const float dx = px - (ax + ex * t), dy = py - (ay + ey * t);
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+} // namespace
+
+bool FlipController::BuildRejectNoticeTexture(int theme, float uiScale,
+                                              bool showBox)
+{
+    ID3D11Device* device = m_renderer.GetDevice();
+    if (!device)
+        return false;
+
+    // Same plate, padding and type as the selected-window label, so the two
+    // read as one family of overlay chrome in whichever theme is selected.
+    const ThemePlate::Style& st = ThemePlate::Get(theme);
+    const int padX     = static_cast<int>(16.0f * uiScale);
+    const int padY     = static_cast<int>(10.0f * uiScale);
+    const int gap      = static_cast<int>(10.0f * uiScale);
+    const int fontH    = static_cast<int>(17.0f * uiScale);
+    // The Settings app's warning glyph is a 13×12 design; drawn here at twice
+    // its size per UI-scale step, which puts it level with the label's icon.
+    const float iconK  = 2.0f * uiScale;
+    const int iconW    = static_cast<int>(std::ceil(13.0f * iconK));
+    const int iconH    = static_cast<int>(std::ceil(12.0f * iconK));
+
+    HDC screenDC = GetDC(nullptr);
+    HDC memDC    = CreateCompatibleDC(screenDC);
+    HFONT font   = CreateFontW(-fontH, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+                               FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                               DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(memDC, font);
+
+    RECT calc{ 0, 0, 0, 0 };
+    DrawTextW(memDC, kNotRespondingText, -1, &calc,
+              DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
+    const int textW  = calc.right;
+    const int textH  = calc.bottom;
+    const int width  = padX + iconW + gap + textW + padX;
+    const int height = padY + (std::max)(iconH, textH) + padY;
+
+    std::vector<float> out(static_cast<size_t>(width) * height * 4u, 0.0f);
+    if (showBox)
+        ThemePlate::PaintPlate(out, width, height, st, uiScale);
+
+    // ---- Amber warning triangle — the Settings app's own glyph ------------
+    // Same path, colour (#E8A33D) and 1.3 stroke as the warnings in
+    // CKSettings, so a warning looks the same in both.  Drawn from distances to
+    // round-capped segments, which gives the same round-joined outline WPF
+    // draws.  Not the shell's stock icon: loading it is slow on the render
+    // thread, and this stays crisp at every UI scale.
+    {
+        struct Seg { float ax, ay, bx, by; };
+        static constexpr Seg kGlyph[] = {
+            {  6.5f, 1.2f, 12.2f, 11.0f },   // triangle
+            { 12.2f, 11.0f, 0.8f, 11.0f },
+            {  0.8f, 11.0f, 6.5f,  1.2f },
+            {  6.5f, 4.8f,  6.5f,  7.6f },   // "!" bar
+            {  6.5f, 9.2f,  6.5f,  9.7f },   // "!" dot
+        };
+        const float halfStroke = 1.3f * iconK * 0.5f;
+        const float amberR = 0xE8 / 255.0f, amberG = 0xA3 / 255.0f,
+                    amberB = 0x3D / 255.0f;
+        const int ix = padX;
+        const int iy = (height - iconH) / 2;
+        for (int yy = 0; yy < iconH; ++yy) {
+            for (int xx = 0; xx < iconW; ++xx) {
+                // Pixel centre in the glyph's own 13×12 design units.
+                const float gx = (static_cast<float>(xx) + 0.5f) / iconK;
+                const float gy = (static_cast<float>(yy) + 0.5f) / iconK;
+                float d = 1e9f;
+                for (const Seg& s : kGlyph)
+                    d = (std::min)(d, SegmentDist(gx, gy, s.ax, s.ay, s.bx, s.by));
+                const float cov = std::clamp(halfStroke - d * iconK + 0.5f,
+                                             0.0f, 1.0f);
+                if (cov <= 0.0f)
+                    continue;
+                ThemePlate::Over(out,
+                                 static_cast<size_t>(iy + yy) * width + (ix + xx),
+                                 amberB * cov, amberG * cov, amberR * cov, cov);
+            }
+        }
+    }
+
+    // ---- Text: the same coverage-mask route the label takes ---------------
+    {
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth       = width;
+        bmi.bmiHeader.biHeight      = -height;   // top-down
+        bmi.bmiHeader.biPlanes      = 1;
+        bmi.bmiHeader.biBitCount    = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* textBits = nullptr;
+        HBITMAP textDib = CreateDIBSection(memDC, &bmi, DIB_RGB_COLORS,
+                                           &textBits, nullptr, 0);
+        if (textDib && textBits) {
+            HGDIOBJ prev = SelectObject(memDC, textDib);
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, RGB(255, 255, 255));
+            const int tx = padX + iconW + gap;
+            RECT tr{ tx, padY, tx + textW, height - padY };
+            DrawTextW(memDC, kNotRespondingText, -1, &tr,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            GdiFlush();
+            SelectObject(memDC, prev);
+            ThemePlate::CompositeTextMask(out, width, height,
+                                          static_cast<uint8_t*>(textBits),
+                                          st, uiScale, showBox);
+        }
+        if (textDib) DeleteObject(textDib);
+    }
+
+    SelectObject(memDC, oldFont);
+    DeleteObject(font);
+    DeleteDC(memDC);
+    ReleaseDC(nullptr, screenDC);
+
+    std::vector<uint8_t> packed;
+    ThemePlate::Pack(out, packed);
+    winrt::com_ptr<ID3D11Texture2D> tex;
+    winrt::com_ptr<ID3D11ShaderResourceView> srv;
+    if (!ThemePlate::CreateTexture(device, packed, width, height, tex, srv))
+        return false;
+
+    m_rejectNoticeTexture = std::move(tex);
+    m_rejectNoticeSRV     = std::move(srv);
+    m_rejectNoticeW       = width;
+    m_rejectNoticeH       = height;
+    m_rejectNoticeTheme   = theme;
+    m_rejectNoticeScale   = uiScale;
+    m_rejectNoticeBox     = showBox;
+    return true;
+}
+
+void FlipController::DrawRejectNotice(ID3D11DeviceContext* ctx, float vpW,
+                                      float vpH, DirectX::XMMATRIX monRemap)
+{
+    if (!m_rejectHwnd || m_rejectNoticeAlpha < 0.01f || !ctx
+        || vpW <= 0.0f || vpH <= 0.0f || m_scene.SlotCount() == 0)
+        return;
+
+    const int   theme   = m_config ? std::clamp(m_config->appTheme, 0, 4) : 0;
+    const float uiScale = std::clamp(m_cascadeH / 1080.0f, 1.0f, 2.5f);
+    // The plate follows the label's own setting, so the two never disagree
+    // about whether overlay text sits on glass.
+    const bool  showBox = !m_config || m_config->selectedLabelBox;
+    if (!m_rejectNoticeSRV || theme != m_rejectNoticeTheme
+        || uiScale != m_rejectNoticeScale || showBox != m_rejectNoticeBox) {
+        if (!BuildRejectNoticeTexture(theme, uiScale, showBox))
+            return;
+    }
+
+    const float w = static_cast<float>(m_rejectNoticeW);
+    const float h = static_cast<float>(m_rejectNoticeH);
+    const float primL = static_cast<float>(m_monLayout.primary.left)  - m_overlayOriginX;
+    const float primT = static_cast<float>(m_monLayout.primary.top)   - m_overlayOriginY;
+    const float primR = static_cast<float>(m_monLayout.primary.right) - m_overlayOriginX;
+    const float margin = 8.0f * uiScale;
+    const float stackGap = 8.0f * uiScale;
+
+    float centerX = 0.0f, top = 0.0f;
+    if (m_labelDrawn) {
+        // The label is up: sit directly above it, centred on it.
+        centerX = m_labelDrawLeft + m_labelDrawW * 0.5f;
+        top     = m_labelDrawTop - stackGap - h;
+        // A label already pressed against the top of the screen leaves no
+        // room above it — go underneath rather than on top of it.
+        if (top < primT + margin)
+            top = m_labelDrawTop + m_labelDrawH + stackGap;
+    } else {
+        // No label (switched off, or nothing to show): take the label's own
+        // place, centred over the front tile's top edge — the same projection
+        // and the same 14 px gap DrawSelectedLabel uses.
+        float frontLift = 0.0f;
+        if (m_hover.AnyLift()) {
+            const float l = m_hover.Lift(0);
+            if (l > 0.001f)
+                frontLift = l * m_scene.GetSlot(0).scaleY * HoverAnimator::kRiseFactor;
+        }
+        using namespace DirectX;
+        QuadDrawCall probe;
+        float a = 0.0f;
+        m_scene.GetDrawCall(0, m_cascadeAspect, probe.mvp, a, frontLift);
+        const XMMATRIX mvp = XMLoadFloat4x4(&probe.mvp) * monRemap;
+        float minX = 0, minY = 0, maxX = 0;
+        bool first = true;
+        const float cxs[4] = { -0.5f, -0.5f, 0.5f, 0.5f };
+        const float cys[4] = { -0.5f,  0.5f, 0.5f, -0.5f };
+        for (int i = 0; i < 4; ++i) {
+            const XMVECTOR v = XMVector3TransformCoord(
+                XMVectorSet(cxs[i], cys[i], 0.0f, 1.0f), mvp);
+            const float ndcX = XMVectorGetX(v), ndcY = XMVectorGetY(v);
+            if (!std::isfinite(ndcX) || !std::isfinite(ndcY))
+                return;
+            const float sx = (ndcX * 0.5f + 0.5f) * vpW;
+            const float sy = (0.5f - ndcY * 0.5f) * vpH;
+            if (first) { minX = maxX = sx; minY = sy; first = false; }
+            else {
+                minX = (std::min)(minX, sx); maxX = (std::max)(maxX, sx);
+                minY = (std::min)(minY, sy);
+            }
+        }
+        centerX = (minX + maxX) * 0.5f;
+        top     = minY - h - 14.0f * uiScale;
+        if (top < primT + margin)
+            top = primT + margin;
+    }
+
+    float left = centerX - w * 0.5f;
+    left = std::clamp(left, primL + margin,
+                      (std::max)(primL + margin, primR - w - margin));
+
+    QuadDrawCall draw;
+    DirectX::XMStoreFloat4x4(&draw.mvp,
+        DirectX::XMMatrixScaling((w / vpW) * 2.0f, (h / vpH) * 2.0f, 1.0f)
+        * DirectX::XMMatrixTranslation(
+              ((left + w * 0.5f) / vpW) * 2.0f - 1.0f,
+              1.0f - ((top + h * 0.5f) / vpH) * 2.0f, 0.0f));
+    draw.alpha      = m_rejectNoticeAlpha;
+    draw.blurAmount = 0.0f;
+    m_quad.Draw(ctx, m_rejectNoticeSRV.get(), draw);
 }

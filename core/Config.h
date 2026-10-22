@@ -159,6 +159,14 @@ struct AppConfig {
     std::wstring cancelKeys = L"Escape";
     std::wstring closeKeys  = L"Delete";
 
+    // Force quit (Controls → Mouse & keyboard → Keys): this key (same tokens
+    // as activationHotkey) pressed `forceQuitPresses` times in a row (1-5)
+    // quits CKFlip3D and restores the hidden windows and the taskbar.  Watched
+    // on the hook thread, so it still works when the rest of the program has
+    // stopped responding.  The presses are not swallowed.  Empty = off.
+    std::wstring forceQuitKey     = L"End";
+    uint32_t     forceQuitPresses = 5;
+
     // --- Mouse in the cascade (Controls → Mouse & keyboard) ---
     // Mouse button identifiers shared by the three bindings below:
     //   0 = off, 1 = left, 2 = right, 3 = middle, 4 = X1, 5 = X2.
@@ -205,6 +213,11 @@ struct AppConfig {
     // Match the owning executable's name as well as the window title, so
     // "chrome" finds a tab whose title mentions neither.
     bool     searchMatchProcess = true;
+    // The cancel key with a query typed clears the query and keeps the
+    // cascade open; a second press closes it.  Off = the cancel key closes the
+    // cascade at once, query or not (the filtered-out windows still rise back
+    // in for the exit, as they do for any exit from a filtered stack).
+    bool     searchCancelClearsFirst = true;
     // Where the field sits on the cascade host, as a percentage of the
     // primary monitor: X is the field's CENTRE, Y its BOTTOM edge, so the
     // default (50, 94) is centred just above the taskbar.  Percentages rather
